@@ -8,6 +8,7 @@
 """
 from functools import reduce
 from operator import mul
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
@@ -15,22 +16,71 @@ from tensorflow.keras import layers
 FLOAT_TYPE = tf.float32
 
 
+# ---------------------------- General Functions -----------------------------
+def get_num_trainable_params():
+    """
+    Get the number of trainable parameters in current session (model).
+
+    Returns:
+        Number of trainable parameters of model.
+    """
+    num_params = 0
+    for variable in tf.trainable_variables():
+        shape = variable.get_shape()
+        num_params += reduce(mul, [dim.value for dim in shape], 1)
+    return num_params
+
+
 def tensordot(tensor_a, tensor_b):
-    """ Tensor dot function. The last dimension of tensor_a and the first dimension of tensor_b must be the same.
-    :param tensor_a:
-    :param tensor_b:
-    :return: the result of tensor_a tensor dot tensor_b.
+    """
+    Tensor dot function. The last dimension of tensor_a and the first dimension of tensor_b must be the same.
+
+    Args:
+        tensor_a: Tensor
+            Shape is [..., dim_a]
+        tensor_b: Tensor
+            Shape is [dim_b, ...]
+
+    Returns:
+        Tensor with shape [..., ...].
     """
     last_idx_a = len(tensor_a.get_shape().as_list()) - 1
     return tf.tensordot(tensor_a, tensor_b, [[last_idx_a], [0]])
 
 
+def label_smoothing(x_onehot, epsilon=0.1):
+    """
+    Label smoothing for one-hot type label.
+
+    Args:
+        x_onehot: Tensor with shape [..., depth]
+        epsilon: float, default 0.1
+            The smoothing factor in range [0.0, 1.0].
+
+    Returns:
+        Tensor with same shape as x_onehot, and its value has been smoothed.
+    """
+    depth = x_onehot.get_shape().as_list()[-1]
+    return (1 - epsilon) * x_onehot + epsilon / depth
+
+
 def swap_axes(tensor, axis1, axis2):
-    """Interchange two axes of an tensor.
-    :param tensor:
-    :param axis1: First axis.
-    :param axis2: Second axis.
-    :return:
+    """
+    Interchange two axes of an tensor.
+    eg.
+        Ten rank of source tensor is 3, the axis1 and axis2 is 2 and 1 respectively, then the
+        returned tensor's dimension is [0, 2, 1].
+
+    Args:
+        tensor: Tensor
+            The source tensor.
+        axis1: int
+            First axis, less than rank(tensor).
+        axis2: int
+            Second axis, less than rank(tensor).
+
+    Returns:
+        A Tensor with same shape as tensor, and its axes has been swapped.
     """
     tensor_perm = list(range(len(tensor.shape.as_list())))
     tensor_perm[axis1] = axis2
@@ -39,14 +89,79 @@ def swap_axes(tensor, axis1, axis2):
     return tf.transpose(tensor, perm=tensor_perm)
 
 
-def create_tensor(shape, value):
-    """Creates a tensor with all elements set to value and dtype is same sa value.
-    :param shape: a list
-    :param value: a number
-    :return:
+def create_tensor(shape, fill_value):
     """
-    tensor_shape = tf.stack(shape)
-    return tf.fill(tensor_shape, value)
+    Creates a tensor with all elements set to value and dtype is same as fill_value.
+
+    Args:
+        shape: list
+            Shape of target tensor.
+        fill_value: int, float or other type
+
+    Returns:
+        Tensor with shape "shape" whose value is fill_value.
+    """
+    return tf.fill(tf.stack(shape), fill_value)
+
+
+def layer_norm(inputs, epsilon=1e-8, name='layer_norm'):
+    """
+    Layer Normalization.
+    Args:
+        inputs: Tensor
+        epsilon: float, default 1e-8
+        name: str
+            Scope name.
+
+    Returns:
+        A tensor with same shape and data type as 'inputs'.
+    """
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+        param_shape = inputs.get_shape()[-1:]
+        gamma = tf.get_variable('gamma', param_shape, initializer=tf.ones_initializer())
+        beta = tf.get_variable('beta', param_shape, initializer=tf.zeros_initializer())
+
+        mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
+        inputs_norm = (inputs - mean) / (variance + epsilon ** 0.5)
+        output = gamma * inputs_norm + beta
+
+        return output
+# ----------------------------------------------------------------------------
+
+
+# --------------------------- Activation Functions ---------------------------
+def gelu(x):
+    cdf = 0.5 * (1.0 + tf.tanh((np.sqrt(2 / np.pi) * (x + 0.044715 * tf.pow(x, 3)))))
+    return x * cdf
+
+
+def prelu(x, name='prelu'):
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+        alpha = tf.get_variable(
+            'alpha',
+            shape=[1],
+            dtype=tf.float32,
+            initializer=tf.initializers.constant(0.0)
+        )
+        w1 = 0.5 * (1 + alpha)
+        w2 = 0.5 * (1 - alpha)
+
+        return w1 * x + w2 * tf.nn.relu(x)
+
+
+def dice(x, is_training, name='dice'):
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+        alpha = tf.get_variable(
+            'alpha',
+            shape=[1],
+            dtype=tf.float32,
+            initializer=tf.initializers.constant(0.0)
+        )
+        x_norm = tf.layers.batch_normalization(x, epsilon=1e-8, training=is_training)
+        p = tf.nn.sigmoid(x_norm)
+
+        return p * x + (1 - p) * x * alpha
+# ----------------------------------------------------------------------------
 
 
 def get_variable_weights(name, shape, collections=None):
@@ -61,15 +176,7 @@ def get_variable_bias(name, shape, collections=None):
                            collections=collections)
 
 
-def get_num_trainable_params():
-    """ Get the number of trainable parameters in current session (model).
-    :return:
-    """
-    num_params = 0
-    for variable in tf.trainable_variables():
-        shape = variable.get_shape()
-        num_params += reduce(mul, [dim.value for dim in shape], 1)
-    return num_params
+
 
 
 class Attention:

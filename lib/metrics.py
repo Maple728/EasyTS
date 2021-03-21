@@ -11,6 +11,30 @@ import numpy as np
 import tensorflow as tf
 
 
+# ------------------- Metric Get Functions ----------------------
+def get_metric_functions(metric_name_list):
+    """ Get metric functions from a list of metric name.
+    :param metric_name_list:
+    :return:
+    """
+    metric_functions = []
+    for metric_name in metric_name_list:
+        metric_functions.append(eval(metric_name + '_np'))
+    return metric_functions
+
+
+def get_metrics_callback_from_names(metric_names):
+    metric_functions = get_metric_functions(metric_names)
+
+    def metrics(preds, labels, **kwargs):
+        res = dict()
+        for metric_name, metric_func in zip(metric_names, metric_functions):
+            res[metric_name] = metric_func(preds, labels, **kwargs)
+        return res
+
+    return metrics
+
+
 # ----------------- loss function for tensorflow --------------------
 def mse_tf(preds, labels):
     return tf.losses.mean_squared_error(labels, preds)

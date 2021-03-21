@@ -13,32 +13,6 @@ import logging
 from lib.metrics import *
 
 
-def get_metric_functions(metric_name_list):
-    """ Get metric functions from a list of metric name.
-    :param metric_name_list:
-    :return:
-    """
-    metric_functions = []
-    for metric_name in metric_name_list:
-        metric_functions.append(eval(metric_name + '_np'))
-    return metric_functions
-
-
-def get_metrics_callback_from_names(metric_names):
-    metric_functions = get_metric_functions(metric_names)
-
-    def metrics(preds, labels, **kwargs):
-        """
-        :param preds:
-        :param labels:
-        :return:
-        """
-        res = dict()
-        for metric_name, metric_func in zip(metric_names, metric_functions):
-            res[metric_name] = metric_func(preds, labels, **kwargs)
-        return res
-
-    return metrics
 
 
 def set_random_seed(seed=9899):
@@ -159,26 +133,58 @@ def get_logger(filename=None):
     return logger
 
 
+def onehot(id_list, depth=None):
+    """
+    One hot a ID array.
+    Args:
+        id_list: array-like
+            A array-like contains discrete IDs with a minimum value of zero.
+        depth: int, default None
+            The depth of one hot. Inferred from id_list when it's None.
+
+    Returns:
+        A ndarray with shape [..., depth]
+    """
+
+    if depth is None:
+        depth = int(np.max(id_list)) + 1
+
+    origin_shape = np.shape(id_list)
+    onehot_shape = origin_shape + (depth,)
+
+    res = np.zeros(shape=onehot_shape, dtype=np.int)
+
+    id_it = np.nditer(id_list, flags=['multi_index'], op_flags=['readonly'])
+
+    with id_it:
+        while not id_it.finished:
+            idx = id_it.multi_index + (int(id_it[0]),)
+            res[idx] = 1
+
+            id_it.iternext()
+
+    return res
+
+
 class Timer(object):
     """
     Count the elapse between start and end time.
     """
 
-    def __init__(self, unit='s'):
-        SECOND_UNIT = 1
-        MINUTE_UNIT = 60
-        HOUR_UNIT = 1440
+    def __init__(self, unit='m'):
+        second_unit = 1
+        minute_unit = 60
+        hour_unit = 1440
 
         unit = unit.lower()
         if unit == 's':
-            self._unit = SECOND_UNIT
+            self._unit = second_unit
         elif unit == 'm':
-            self._unit = MINUTE_UNIT
+            self._unit = minute_unit
         elif unit == 'h':
-            self._unit = HOUR_UNIT
+            self._unit = hour_unit
         else:
             raise RuntimeError('Unknown unit:', unit)
-        self._unit = unit
         # default start time is set to the time the object initialized
         self._start_time = time.time()
 
