@@ -8,6 +8,8 @@
 """
 import tensorflow as tf
 
+from .tf_utils import swap_axes
+
 
 def ffn_layer(
         x,
@@ -21,6 +23,7 @@ def ffn_layer(
 ):
     """
     Feed Forward Network with short-cut and batch normalization.
+
     Args:
         x: Tensor
         dims: list
@@ -111,7 +114,7 @@ def multi_head_attention(
         # [n_heads, ..., n_keys, hidden_dim / n_heads]
         values = tf.stack(tf.split(values, n_heads, axis=-1), axis=0)
 
-        # [n_heads, ..., n_queries, hidden_dim / n_heads]p
+        # [n_heads, ..., n_queries, hidden_dim / n_heads]
         context_vector = scaled_dot_product_attention(queries, keys, values, key_mask, causality)
         # [..., n_queries, hidden_dim]
         context_vector = tf.concat(tf.unstack(context_vector, axis=0), axis=-1)
@@ -120,3 +123,105 @@ def multi_head_attention(
         output = layers.Dense(hidden_dim, name='head_merge')(context_vector)
 
         return output
+
+
+def attention_layer(
+        queries,
+        keys,
+        values,
+        is_training,
+        dropout_rate=0.0,
+        score_method='dot',
+        mask_method=None,
+        name='att_layer'
+):
+    """
+
+    Args:
+        queries: Tensor with shape [..., n_q, dim]
+        keys: Tensor with shape [..., n_k, dim]
+        values: Tensor with shape [..., n_k, dim]
+        is_training: bool
+            Identify whether it is in training.
+        dropout_rate: float, default 0.0
+            Dropout rate of attention weights.
+        score_method: str, default 'dot', option in ['add', 'dot', 'multiply']
+            The method calculating score.
+        mask_method: str, default None, option in [None, 'causality', 'causality-exclude']
+            The method for masking attention weights.
+        name: str
+            Scope name.
+
+    Returns:
+        Context vector with shape [..., n_q, dim], derived from weighted values.
+    """
+    mask_val = -2 ** 15
+
+    dim = queries.get_shape().as_list()[-1]
+
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+        if score_method == 'add':
+            # shape -> [..., n_q, 1]
+            q = tf.layers.dense(queries, 1) / (dim ** 0.5)
+            # shape -> [..., n_k, 1]
+            k = tf.layers.dense(keys, 1) / (dim ** 0.5)
+            # shape -> [..., 1, n_k]
+            k = swap_axes(k, -1, -2)
+
+            # shape -> [..., n_q, n_k]
+            scores = q + k
+        elif score_method == 'dot':
+            # shape -> [..., n_q, n_k]
+            scores = tf.matmul(queries, keys, transpose_b=True) / (dim ** 0.5)
+        elif score_method == 'multiply':
+            scores = tf.layers.dense(queries, dim)
+            # shape -> [..., n_q, n_k]
+            scores = tf.matmul(scores, keys, transpose_b=True)
+        else:
+            raise RuntimeError(f'Unknown score_method: {score_method}')
+
+        if mask_method is None:
+            # shape -> [..., n_q, n_k]
+            att_weights = tf.nn.softmax(scores, axis=-1)
+        else:
+            # use mask in attention weights
+            # shape -> [..., n_q, n_k]
+            ones_mat = tf.ones_like(scores)
+            zeros_mat = tf.zeros_like(scores)
+            mask_val_mat = ones_mat * mask_val
+
+            tril_mat = tf.linalg.LinearOperatorLowerTriangular(ones_mat).to_dense()
+
+            if mask_method == 'causality':
+                # keep the past and itself data, and drop the future data.
+                # mask for weights calculation
+                scores = tf.where(
+                    tf.equal(tril_mat, 0),
+                    mask_val_mat,
+                    scores
+                )
+                att_weights = tf.nn.softmax(scores, axis=-1)
+
+                # strict mask
+                # att_weights = tf.where(
+                #     tf.equal(tril_mat, 0),
+                #     zeros_mat,
+                #     att_weights
+                # )
+            elif mask_method == 'causality-exclude':
+                scores = tf.where(
+                    tf.equal(tril_mat, 1),
+                    mask_val_mat,
+                    scores
+                )
+                att_weights = tf.nn.softmax(scores, axis=-1)
+            else:
+                raise RuntimeError(f'Unknown mask_method: {mask_method}')
+
+        # dropout on weights
+        att_weights = tf.layers.dropout(att_weights, rate=dropout_rate, training=is_training)
+
+        # shape -> [..., n_q, dim]
+        context_vector = tf.matmul(att_weights, values)
+
+        return context_vector

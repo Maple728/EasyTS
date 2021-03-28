@@ -82,7 +82,11 @@ def swap_axes(tensor, axis1, axis2):
     Returns:
         A Tensor with same shape as tensor, and its axes has been swapped.
     """
-    tensor_perm = list(range(len(tensor.shape.as_list())))
+    rank = len(tensor.shape.as_list())
+    tensor_perm = list(range(rank))
+    axis1 = (axis1 + rank) % rank
+    axis2 = (axis2 + rank) % rank
+
     tensor_perm[axis1] = axis2
     tensor_perm[axis2] = axis1
 
